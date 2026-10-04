@@ -1130,6 +1130,8 @@ struct ContentView: View {
         // Escape puts the page back. On a blank tab there is no page to put
         // back, so it belongs to whatever else wants it.
         if event.keyCode == 53 {
+            // A game holding the pointer lets it go first, as in Safari.
+            if browser.releasePointer() { return true }
             if browser.editingTab != nil {
                 browser.cancelTabEdit()
                 return true

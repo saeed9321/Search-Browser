@@ -25,6 +25,9 @@ struct ImportPanel: View {
     @State private var chosen: [String: String] = [:]
     @State private var previews: [String: ImportSource.Preview] = [:]
 
+    @State private var wantsCookies = false
+    /// Every profile's cookies and sign-ins into a Space named after it.
+    @State private var wantsProfileSpaces = false
     @State private var wantsPasswords = true
     @State private var wantsBookmarks = true
     @State private var wantsHistory = true
@@ -124,7 +127,7 @@ struct ImportPanel: View {
                         }
                     } else if let source = pick {
                         Pill(bringing ? "Bringing…" : "Bring them in", filled: true) { bring(from: source) }
-                            .disabled(bringing || !(wantsPasswords || wantsBookmarks || wantsHistory || (wantsExtensions && !fresh(source).isEmpty)
+                            .disabled(bringing || !((wantsCookies && source.asksForKey && profile(of: source) != nil) || profileSpaces(source) || wantsPasswords || wantsBookmarks || wantsHistory || (wantsExtensions && !fresh(source).isEmpty)
                                                      || (wantsArc && arcCounts[key(source, profile(of: source))] != nil)))
                         if bringing { Ring(size: 10) }
                     }
@@ -210,7 +213,22 @@ struct ImportPanel: View {
                 }
                 Rule()
             }
+            // Each profile's sign-ins kept apart, as the browser kept them.
+            if case .chromium = source, let choices = profiles[source.id], choices.count > 1 {
+                Line("Each profile as a Space", profileSpacesDetail(source, choices)) {
+                    Switch(on: $wantsProfileSpaces)
+                }
+                Rule()
+            }
             // A kind the browser has none of is said so, and can't be picked.
+            if case .chromium = source, !profileSpaces(source) {
+                Line("Cookies and sign-ins", profile(of: source) == nil
+                     ? "Choose one profile to avoid mixing accounts"
+                     : "Into the current Space; existing cookies are kept. Some sites still require a login.") {
+                    option($wantsCookies, none: profile(of: source) == nil || preview?.cookies == 0)
+                }
+                Rule()
+            }
             Line("Passwords", preview?.passwords == 0 ? "None in \(source.name)" : source.asksForKey
                  ? "macOS asks once for \(source.name)'s keychain key"
                  : "Read from \(source.name)'s own files, unless it has a primary password") {
@@ -266,13 +284,30 @@ struct ImportPanel: View {
         return id.isEmpty ? nil : id
     }
 
+    /// Whether every profile's cookies go into a Space of its own.
+    private func profileSpaces(_ source: ImportSource) -> Bool {
+        wantsProfileSpaces && source.asksForKey && (profiles[source.id]?.count ?? 0) > 1
+    }
+
+    /// Where each profile's sign-ins go: "Alex into Personal; the other 3
+    /// into Spaces named after them, each with its own cookies and sign-ins".
+    private func profileSpacesDetail(_ source: ImportSource, _ choices: [ImportSource.Profile]) -> String {
+        let others = choices.count - 1
+        let rest = "\(others == 1 ? "the other" : "the other \(others)") into Spaces named after them, each with its own cookies and sign-ins"
+        guard let usual = choices.first(where: { $0.id == usual[source.id] }),
+              !browser.spaces.contains(where: { $0.name.localizedCaseInsensitiveCompare(usual.name) == .orderedSame }),
+              let first = browser.spaces.first(where: \.isFirst)
+        else { return "Every profile into a Space named after it, each with its own cookies and sign-ins" }
+        return "\(usual.name) into \(first.name); \(rest)"
+    }
+
     private func detail(of source: ImportSource) -> String {
         guard let preview = previews[key(source, profile(of: source))] else { return "Counting…" }
         func count(_ n: Int, _ one: String) -> String { n == 1 ? "1 \(one)" : "\(n.formatted()) \(one)s" }
         var parts: [String] = []
         if let choices = profiles[source.id], choices.count > 1 { parts.append("\(choices.count) profiles") }
         // What it has; a kind it has none of isn't worth a word.
-        for (n, one) in [(preview.bookmarks, "bookmark"), (preview.places, "place"), (preview.passwords, "password")] where n > 0 {
+        for (n, one) in [(preview.bookmarks, "bookmark"), (preview.places, "place"), (preview.passwords, "password"), (preview.cookies, "cookie")] where n > 0 {
             parts.append(count(n, one))
         }
         if let arc = arcCounts[key(source, profile(of: source))], arc.spaces > 0 {
@@ -361,27 +396,101 @@ struct ImportPanel: View {
         let passwords = wantsPasswords && preview?.passwords != 0
         let marks = wantsBookmarks && preview?.bookmarks != 0
         let places = wantsHistory && preview?.places != 0
+        let cookieStore = Spaces.store(for: browser.spaceID).httpCookieStore
         bringing = true
         var said: [Int: Said] = [:]
         let group = DispatchGroup()
-        if passwords {
+        // Every profile into its own Space, in place of the one profile's
+        // cookies into the Space on screen.
+        let perProfile = profileSpaces(source)
+        let everyProfile = profiles[source.id] ?? []
+        let usualIndex = everyProfile.firstIndex { $0.id == usual[source.id] }
+        let cookies = wantsCookies && !perProfile && profile != nil && source.asksForKey
+        if passwords || cookies || perProfile {
             group.enter()
-            // The one moment macOS asks for the key, if the browser keeps one.
             DispatchQueue.global(qos: .userInitiated).async {
-                let outcome = Result { try source.read(profile: profile) }
-                DispatchQueue.main.async {
-                    switch outcome {
-                    case .success(let found):
-                        let kept = browser.keep(found)
-                        ImportRecords.note(source.name, passwords: kept)
-                        let skipped = found.skipped > 0 ? " (\(found.skipped.formatted()) skipped: no address)" : ""
-                        said[0] = Said(ok: true, text: (kept == 1 ? "1 password" : "\(kept.formatted()) passwords") + skipped)
-                    case .failure(Chromium.Trouble.noPassphrase):
-                        said[0] = Said(ok: false, text: "macOS didn't hand over \(source.name)'s key — allow it and try again")
-                    case .failure(Mozilla.Trouble.primaryPassword):
-                        said[0] = Said(ok: false, text: "\(source.name) has a primary password: export your passwords from it and bring in the CSV file")
-                    case .failure:
-                        said[0] = Said(ok: false, text: "No passwords readable in \(source.name)")
+                var passwordOutcome: Result<Chromium.Found, Error>?
+                var cookieOutcome: Result<Chromium.CookieBatch, Error>?
+                /// Each profile with cookies to read, and them.
+                var spaceOutcome: Result<[(name: String, usual: Bool, batch: Chromium.CookieBatch)], Error>?
+                if case .chromium(let chromium) = source, cookies || perProfile {
+                    // One key for every profile: macOS asks once.
+                    do {
+                        guard let phrase = Chromium.safeStorage(chromium) else { throw Chromium.Trouble.noPassphrase }
+                        let key = Chromium.stretch(phrase)
+                        if passwords { passwordOutcome = Result { try Chromium.read(chromium, profile: profile, cookieKey: key) } }
+                        if cookies, let profile {
+                            cookieOutcome = Result {
+                                guard let folder = chromium.profiles(only: profile).first,
+                                      let file = Chromium.cookieFile(in: folder) else { throw Chromium.Trouble.unreadable }
+                                return try Chromium.decodeCookies(in: file, key: key)
+                            }
+                        }
+                        if perProfile {
+                            let read = everyProfile.enumerated().compactMap { index, each -> (name: String, usual: Bool, batch: Chromium.CookieBatch)? in
+                                guard let folder = chromium.profiles(only: each.id).first,
+                                      let file = Chromium.cookieFile(in: folder),
+                                      let batch = try? Chromium.decodeCookies(in: file, key: key) else { return nil }
+                                return (each.name, index == usualIndex, batch)
+                            }
+                            spaceOutcome = read.isEmpty ? .failure(Chromium.Trouble.unreadable) : .success(read)
+                        }
+                    } catch {
+                        if passwords { passwordOutcome = .failure(error) }
+                        if cookies { cookieOutcome = .failure(error) }
+                        if perProfile { spaceOutcome = .failure(error) }
+                    }
+                } else if passwords {
+                    passwordOutcome = Result { try source.read(profile: profile) }
+                }
+                Task { @MainActor in
+                    if let outcome = passwordOutcome {
+                        switch outcome {
+                        case .success(let found):
+                            let kept = browser.keep(found)
+                            ImportRecords.note(source.name, passwords: kept)
+                            let skipped = found.skipped > 0 ? " (\(found.skipped.formatted()) skipped: no address)" : ""
+                            said[0] = Said(ok: true, text: (kept == 1 ? "1 password" : "\(kept.formatted()) passwords") + skipped)
+                        case .failure(Chromium.Trouble.noPassphrase):
+                            said[0] = Said(ok: false, text: "macOS didn't hand over \(source.name)'s key - allow it and try again")
+                        case .failure(Mozilla.Trouble.primaryPassword):
+                            said[0] = Said(ok: false, text: "\(source.name) has a primary password: export your passwords from it and bring in the CSV file")
+                        case .failure:
+                            said[0] = Said(ok: false, text: "No passwords readable in \(source.name)")
+                        }
+                    }
+                    if let outcome = cookieOutcome {
+                        switch outcome {
+                        case .success(let batch):
+                            let result = await CookieImport.install(batch, into: cookieStore)
+                            let failed = result.failed > 0 ? ", \(result.failed.formatted()) not accepted by WebKit" : ""
+                            said[5] = Said(ok: result.failed == 0, text: "\(result.added.formatted()) cookies imported, \(result.kept.formatted()) already here, \(batch.skipped.formatted()) expired or unsupported" + failed)
+                        case .failure(Chromium.Trouble.noPassphrase):
+                            said[5] = Said(ok: false, text: "macOS didn't hand over \(source.name)'s key - allow it and try again")
+                        case .failure:
+                            said[5] = Said(ok: false, text: "No cookies readable in \(source.name)")
+                        }
+                    }
+                    if let outcome = spaceOutcome {
+                        switch outcome {
+                        case .success(let found):
+                            let targets = browser.spaces(forProfiles: found.map(\.name), usual: found.firstIndex(where: \.usual))
+                            var added = 0, kept = 0, failed = 0
+                            for (each, id) in zip(found, targets.ids) {
+                                let result = await CookieImport.install(each.batch, into: Spaces.store(for: id).httpCookieStore)
+                                added += result.added
+                                kept += result.kept
+                                failed += result.failed
+                            }
+                            func count(_ n: Int, _ one: String) -> String { n == 1 ? "1 \(one)" : "\(n.formatted()) \(one)s" }
+                            let rejected = failed > 0 ? ", \(failed.formatted()) not accepted by WebKit" : ""
+                            said[6] = Said(ok: failed == 0, text: "\(count(found.count, "profile")) into Spaces (\(count(targets.made, "new space"))): "
+                                           + "\(added.formatted()) cookies imported, \(kept.formatted()) already here" + rejected)
+                        case .failure(Chromium.Trouble.noPassphrase):
+                            said[6] = Said(ok: false, text: "macOS didn't hand over \(source.name)'s key - allow it and try again")
+                        case .failure:
+                            said[6] = Said(ok: false, text: "No cookies readable in \(source.name)'s profiles")
+                        }
                     }
                     group.leave()
                 }

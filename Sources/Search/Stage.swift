@@ -396,9 +396,10 @@ struct DragStrip: NSViewRepresentable {
     /// The run at the trailing end that belongs to a button.
     var trailing: CGFloat = 0
     /// Stands in for the title bar's own double-click, in a strip that is
-    /// empty tab-row rather than title bar: the empty space below or after
-    /// the tabs, where a double-click opens a new tab instead of zooming the
-    /// window.
+    /// empty tab-row rather than title bar: the empty space below the tabs
+    /// in the column, where a double-click opens a new tab instead of
+    /// zooming the window. Across the top the empty row zooms, as the
+    /// lights' corner does.
     var onDoubleClick: (() -> Void)? = nil
 
     func makeNSView(context: Context) -> NSView { Strip() }

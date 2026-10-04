@@ -1,5 +1,7 @@
 # Search
 
+> **Search-Browser fork.** This fork of [driceroland/Search](https://github.com/driceroland/Search) adds two things to Bring things over: **cookie and sign-in import** from Chromium browsers, and **each browser profile as its own named Space**, and makes **3D games' mouse-look (pointer lock)** work. See [FORK.md](FORK.md). Everything else is upstream's work, credited below.
+
 A small, fast, quiet web browser for the Mac, by [Office Commun](https://officecommun.com).
 
 ![Search, with its tabs down the left and a page taking the rest of the window](.github/screenshot.png)
@@ -82,7 +84,7 @@ So anyone can read exactly what a browser handling their passwords and history i
 
 - macOS 14 or later, Xcode 16 / Swift 6 toolchain
 - `swift build` — runs the app straight from the SwiftPM binary
-- `./build.sh` — assembles a real, double-clickable `Search.app` in `build/`, ad-hoc signed so it runs on your own Mac
+- `./build.sh` — assembles a real, double-clickable `Search.app` in `build/`, signed with your Apple Development certificate if you have one (ad-hoc otherwise) so it runs on your own Mac
 
 A build you make yourself won't be notarized or carry Office Commun's Developer ID, so the first launch needs a right-click → Open (or an allow in System Settings → Privacy & Security). That's expected — it's the same thing that happens with any app that isn't from the App Store or a notarized DMG. Your own build also keeps its passwords apart from a signed Search's: the keychain tells the two apart by their signatures.
 

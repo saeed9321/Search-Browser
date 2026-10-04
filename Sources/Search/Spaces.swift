@@ -259,6 +259,37 @@ extension Browser {
         }
     }
 
+    /// A space for each of another browser's profiles, by the profile's name:
+    /// a space of that name already here, else the first space for the
+    /// profile used last — where its sign-ins went before there were spaces —
+    /// else a new one with cookies and sign-ins of its own. Turns spaces on.
+    /// Each profile's space, in the order given, and how many were made.
+    func spaces(forProfiles names: [String], usual: Int?) -> (ids: [UUID], made: Int) {
+        if !prefs.usesSpaces { prefs.usesSpaces = true }
+        var list = spaces
+        var ids: [UUID] = []
+        var made = 0
+        for (index, name) in names.enumerated() {
+            if let same = list.first(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) {
+                ids.append(same.id)
+            } else if index == usual {
+                ids.append(Space.firstID)
+            } else {
+                let used = Set(list.map(\.symbol))
+                let space = Space(id: UUID(), name: name, colour: 0,
+                                  icon: Spaces.icons.first { !used.contains($0) } ?? "briefcase", sharesSignIns: false)
+                list.append(space)
+                ids.append(space.id)
+                made += 1
+            }
+        }
+        if made > 0 {
+            spaces = list
+            Spaces.write(list)
+        }
+        return (ids, made)
+    }
+
     /// Dragged to another place among the dots. ⌃1–⌃9 follow the order.
     func moveSpace(_ id: UUID, to index: Int) {
         guard let from = spaces.firstIndex(where: { $0.id == id }), spaces.indices.contains(index), from != index else { return }

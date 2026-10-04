@@ -375,6 +375,51 @@ final class ImportFileTests: XCTestCase {
     }
 
     @MainActor
+    func testChromiumProfilesBecomeNamedSpacesWithSeparateSignIns() async throws {
+        let browser = makeImportTestBrowser()
+        let previousUsesSpaces = browser.prefs.usesSpaces
+        let previousSpaces = browser.spaces
+        let suffix = UUID().uuidString
+        let names = ["Alex \(suffix)", "Work \(suffix)", "Studio \(suffix)"]
+        browser.prefs.usesSpaces = false
+        defer {
+            for space in browser.spaces where names.contains(space.name) { Spaces.erase(space.id) }
+            browser.spaces = previousSpaces
+            Spaces.write(previousSpaces)
+            browser.prefs.usesSpaces = previousUsesSpaces
+        }
+
+        let first = browser.spaces(forProfiles: names, usual: 0)
+        XCTAssertTrue(browser.prefs.usesSpaces)
+        XCTAssertEqual(first.made, 2)
+        XCTAssertEqual(first.ids[0], Space.firstID, "the profile used last goes where its sign-ins already are")
+        let made = first.ids.dropFirst().compactMap { id in browser.spaces.first { $0.id == id } }
+        XCTAssertEqual(made.map(\.name), Array(names.dropFirst()))
+        XCTAssertEqual(made.map(\.sharesSignIns), [false, false])
+        XCTAssertEqual(Set(made.map(\.symbol)).count, 2, "each new space wears an icon of its own")
+
+        let again = browser.spaces(forProfiles: names.map { $0.uppercased() }, usual: 0)
+        XCTAssertEqual(again.made, 0, "a space of the profile's name is used again, whatever its case")
+        XCTAssertEqual(again.ids, first.ids)
+
+        // A sign-in in one profile's space is seen in no other.
+        let work = Spaces.store(for: first.ids[1])
+        let studio = Spaces.store(for: first.ids[2])
+        XCTAssertFalse(work === studio)
+        XCTAssertFalse(work === Spaces.store(for: Space.firstID))
+        let cookie = try XCTUnwrap(HTTPCookie(properties: [.domain: "isolation.example", .path: "/", .name: "sid", .value: suffix,
+                                                            .expires: Date().addingTimeInterval(3600)]))
+        await work.httpCookieStore.setCookie(cookie)
+        guard await work.httpCookieStore.allCookies().contains(where: { $0.value == suffix }) else {
+            throw XCTSkip("WebKit's cookie service cannot store the fixture in this environment")
+        }
+        for other in [studio, Spaces.store(for: Space.firstID)] {
+            let seen = await other.httpCookieStore.allCookies()
+            XCTAssertFalse(seen.contains { $0.value == suffix }, "a space's cookie leaked into another space")
+        }
+    }
+
+    @MainActor
     func testArcImportKeepsSpacesFoldersPinsAndImportRecordCounts() throws {
         let browser = makeImportTestBrowser()
         let previousRecords = Store.settings.data(forKey: "import.records")

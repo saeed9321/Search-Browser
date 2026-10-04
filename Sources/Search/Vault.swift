@@ -55,22 +55,30 @@ enum Vault {
     /// saved passwords it could never read back. So: the list first, without
     /// secrets, then each secret on its own.
 
-    /// What is kept for a host, exactly. See `logins(matching:)` for the
-    /// version that also looks across a site's subdomains.
-    static func logins(for host: String) -> [Login] {
-        rows(where: [kSecAttrServer as String: host]).compactMap(login(from:))
+    // Every secret read is one keychain dialog wherever the keychain doesn't
+    // know this build yet: an ad-hoc build, or the first run of a newly
+    // signed one. A list that read each account's password before it drew
+    // was a row of identical "Search wants to use…" dialogs — two dozen on
+    // one site's sign-in box — again every time the caret came back into it.
+    // So lists are made without secrets, and only the account picked is read.
+
+    /// What is kept for a host, exactly, without secrets. See
+    /// `kept(matching:)` for the version that also looks across a site's
+    /// subdomains.
+    static func kept(for host: String) -> [Kept] {
+        rows(where: [kSecAttrServer as String: host]).compactMap(kept(from:))
     }
 
     /// The keychain matches a server name exactly, and a sign-in rarely lives
     /// on the page you saved it from — accounts.example.com asks, and the
     /// password was kept for example.com. So the site is matched as a site:
     /// the host first, then anything sharing its registrable domain.
-    static func logins(matching host: String) -> [Login] {
+    static func kept(matching host: String) -> [Kept] {
         let domain = registrable(host)
-        let exact = logins(for: host)
+        let exact = kept(for: host)
         let wider = rows(where: [:])
             .filter { ($0[kSecAttrServer as String] as? String).map { $0 != host && registrable($0) == domain } ?? false }
-            .compactMap(login(from:))
+            .compactMap(kept(from:))
         return (exact + wider).sorted { ($0.used ?? .distantPast) > ($1.used ?? .distantPast) }
     }
 
@@ -121,7 +129,7 @@ enum Vault {
     }
 
     /// One item's secret, where a list holds only the item: read when a
-    /// password is shown or copied, and never as part of a list.
+    /// password is shown, copied or filled in, and never as part of a list.
     static func secret(of kept: Kept) -> String? { secret(host: kept.host, user: kept.user) }
 
     /// What an item's attributes say beyond its name: when it was last used,
@@ -132,17 +140,6 @@ enum Vault {
             .flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
         let clear = (row[kSecAttrProtocol as String] as? String) == (kSecAttrProtocolHTTP as String)
         return (used, clear)
-    }
-
-    /// One item with its secret, for the paths that hand a password over:
-    /// filling a sign-in in, and telling whether one is already kept.
-    private static func login(from row: [String: Any]) -> Login? {
-        guard let host = row[kSecAttrServer as String] as? String,
-              let user = row[kSecAttrAccount as String] as? String,
-              let password = secret(host: host, user: user)
-        else { return nil }
-        let (used, clear) = noted(row)
-        return Login(host: host, user: user, password: password, used: used, clear: clear)
     }
 
     /// One item without its secret, for the list.
@@ -191,9 +188,19 @@ enum Vault {
         return SecItemAdd(fresh as CFDictionary, nil) == errSecSuccess
     }
 
-    /// It was just used to sign in. Lists put it first from now on.
-    static func touch(_ login: Login) {
-        save(host: login.host, user: login.user, password: login.password, used: Date(), clear: login.clear)
+    /// It was just used to sign in. Lists put it first from now on. Only what
+    /// the item says about itself changes: the secret is neither read nor
+    /// written again for it.
+    static func touch(_ kept: Kept) {
+        SecItemUpdate([
+            kSecClass as String: kSecClassInternetPassword,
+            kSecAttrServer as String: kept.host,
+            kSecAttrAccount as String: kept.user,
+            kSecAttrLabel as String: label,
+        ] as CFDictionary, [
+            kSecAttrComment as String: String(Date().timeIntervalSince1970),
+            kSecAttrProtocol as String: kept.clear ? kSecAttrProtocolHTTP : kSecAttrProtocolHTTPS,
+        ] as CFDictionary)
     }
 
     static func forget(host: String, user: String) {

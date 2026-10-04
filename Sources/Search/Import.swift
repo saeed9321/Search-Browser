@@ -39,7 +39,7 @@ enum Chromium {
         var profiles: [URL] {
             let inside = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
             return ([root] + inside).filter { folder in
-                ["Login Data", "Bookmarks", "History"].contains {
+                ["Login Data", "Bookmarks", "History", "Cookies", "Network/Cookies"].contains {
                     FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path)
                 }
             }
@@ -142,9 +142,13 @@ enum Chromium {
 
     /// The passwords of one profile, or of all of them when `profile` is
     /// nil. The key is asked for once, here, whichever it is.
-    static func read(_ source: Source, profile: String? = nil) throws -> Found {
-        guard let passphrase = safeStorage(source) else { throw Trouble.noPassphrase }
-        let key = stretch(passphrase)
+    static func read(_ source: Source, profile: String? = nil, cookieKey: [UInt8]? = nil) throws -> Found {
+        let key: [UInt8]
+        if let cookieKey { key = cookieKey }
+        else {
+            guard let passphrase = safeStorage(source) else { throw Trouble.noPassphrase }
+            key = stretch(passphrase)
+        }
 
         var logins: [Login] = []
         var never: [String] = []
@@ -367,6 +371,8 @@ enum Chromium {
             bookmarks: Bookmarks.count(bookmarks(in: source, profile: profile)),
             places: min(limit, places),
             passwords: passwords,
+            cookies: source.profiles(only: profile).compactMap { cookieFile(in: $0) }
+                .reduce(0) { $0 + count("SELECT COUNT(*) FROM cookies", in: $1) },
             extensions: extensions(in: source, profile: profile)
         )
     }
@@ -442,7 +448,7 @@ enum Chromium {
     /// counting never does.
     static private(set) var keyAsks = 0
 
-    private static func safeStorage(_ source: Source) -> String? {
+    static func safeStorage(_ source: Source) -> String? {
         keyAsks += 1
         // A test run's made-up browser keeps its key beside its profiles,
         // not in the keychain.
@@ -466,7 +472,7 @@ enum Chromium {
 
     /// Chromium's own recipe, unchanged for a decade: PBKDF2 over SHA-1, the
     /// salt "saltysalt", 1003 rounds, sixteen bytes out.
-    private static func stretch(_ passphrase: String) -> [UInt8] {
+    static func stretch(_ passphrase: String) -> [UInt8] {
         var key = [UInt8](repeating: 0, count: 16)
         let salt = Array("saltysalt".utf8)
         let pass = Array(passphrase.utf8)
@@ -1321,6 +1327,7 @@ enum ImportSource: Identifiable, Hashable {
         var bookmarks = 0
         var places = 0
         var passwords = 0
+        var cookies = 0
         /// Chrome Web Store ids, for a Chromium browser.
         var extensions: [String] = []
     }
