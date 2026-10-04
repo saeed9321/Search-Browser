@@ -31,7 +31,7 @@ enum Palette {
     enum NS {
         static let ground = pair(1.0, 0.11)
         static let ink = pair(0.09, 0.93)
-        static let muted = pair(0.55, 0.58)
+        static let muted = pair(0.42, 0.68)
         static let faint = pair(0.83, 0.32)
         static let hairline = pair(0.91, 0.20)
         static let wash = pair(0.937, 0.175)
@@ -112,6 +112,8 @@ enum Metrics {
     /// Back, forward and reload, at the far end of the row beside the
     /// bookmarks: three doors and the air before the next one.
     static let helm: CGFloat = 3 * 26 + 2 * 2 + 8
+    static let navigation: CGFloat = 48
+    static let chrome: CGFloat = strip + navigation
     /// The same three doors again, in the sidebar, where they sit right of
     /// the lights instead. The column already has 10 of horizontal padding
     /// of its own before this even starts, so this is the lights' own edge
@@ -130,7 +132,7 @@ enum Metrics {
     /// inside its own edges.
     static let tabWidth: CGFloat = 186
     static let tabTitled: CGFloat = 80
-    static let tabMinWidth: CGFloat = 36
+    static let tabMinWidth: CGFloat = 80
     static let tabGap: CGFloat = 2
     /// A pinned tab is a square the height of the row, holding one letter.
     static let pinWidth: CGFloat = 30

@@ -1449,6 +1449,17 @@ final class Browser: NSObject, ObservableObject {
     /// The last Clear, and the empty tab it left in front: an undo takes
     /// that tab away again while it is still empty.
     private var lastClear: (batch: UUID, blank: Tab.ID?)?
+    private struct ClosedUnpinned {
+        let space: UUID
+        let order: [Tab.ID]
+        let tabs: [Tab]
+        let groups: [TabGroup]
+        let splits: [TabSplit]
+        let active: Tab.ID?
+        var blank: Tab.ID?
+    }
+    private var closedUnpinned: ClosedUnpinned?
+    @Published private(set) var canUndoCloseUnpinnedTabs = false
 
     private var bag = Set<AnyCancellable>()
     /// The minute-by-minute look for tabs to put to sleep, and the ear for
@@ -2167,6 +2178,8 @@ final class Browser: NSObject, ObservableObject {
 
     /// Its window closed for good, with others open: every page let go.
     func closeAll() {
+        closedUnpinned = nil
+        canUndoCloseUnpinnedTabs = false
         if floating != nil { land() }
         if peekTab != nil { closePeek() }
         for tab in tabs + parkedTabs { tab.close() }
@@ -2547,6 +2560,10 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func select(_ tab: Tab, floatPrevious: Bool = true) {
+        if tab.pin != nil {
+            editing = false
+            typed = ""
+        }
         if let pair = split(for: tab), activeSplit?.id == pair.id, activeID != tab.id {
             focusPane(tab)
             return
@@ -2719,6 +2736,56 @@ final class Browser: NSObject, ObservableObject {
         newTab()
         lastClear = (batch, activeID.flatMap { had.contains($0) ? nil : $0 })
         for tab in onScreen where tab.id != activeID { close(tab) }
+    }
+
+    func closeUnpinnedTabs() {
+        let going = tabs.filter { $0.pin == nil && !$0.bench }
+        guard !going.isEmpty else { return }
+        var snapshot = ClosedUnpinned(space: spaceID, order: tabs.map(\.id), tabs: going,
+                                      groups: tabGroups, splits: splits, active: activeID)
+        let batch = UUID()
+        if going.contains(where: { $0.id == activeID }) {
+            let blank = Tab(configuration: Web.configuration(space: spaceID))
+            adopt(blank)
+            select(blank, floatPrevious: false)
+            snapshot.blank = blank.id
+        }
+        clearing = batch
+        for tab in going {
+            tab.sleep(picture: nil)
+            close(tab)
+        }
+        clearing = nil
+        // Undo retains private tabs only in this window's memory, never in history.
+        ghosts.removeAll { $0.batch == batch }
+        closedUnpinned = snapshot
+        canUndoCloseUnpinnedTabs = true
+        announce("Unpinned tabs closed — Undo is available in Browser tools")
+        rememberSession()
+    }
+
+    func undoCloseUnpinnedTabs() {
+        guard let snapshot = closedUnpinned else { return }
+        guard snapshot.space == spaceID || (prefs.usesSpaces && spaces.contains { $0.id == snapshot.space }) else { return }
+        if snapshot.space != spaceID { switchSpace(to: snapshot.space) }
+        closedUnpinned = nil
+        canUndoCloseUnpinnedTabs = false
+        let oldGroups = Set(snapshot.groups.map(\.id))
+        tabGroups = snapshot.groups + tabGroups.filter { !oldGroups.contains($0.id) }
+        for tab in snapshot.tabs { prepare(tab) }
+        let restored = tabs + snapshot.tabs.filter { back in !tabs.contains { $0.id == back.id } }
+        let byID = Dictionary(uniqueKeysWithValues: restored.map { ($0.id, $0) })
+        let original = Set(snapshot.order)
+        tabs = snapshot.order.compactMap { byID[$0] } + restored.filter { !original.contains($0.id) }
+        for pair in snapshot.splits where !splits.contains(where: { current in current.tabs.contains { pair.contains($0) } }) && Browser.holds(pair, in: tabs) {
+            splits.append(pair)
+        }
+        if let id = snapshot.active, let tab = tabs.first(where: { $0.id == id }) { select(tab, floatPrevious: false) }
+        if let id = snapshot.blank, let blank = tabs.first(where: { $0.id == id }),
+           blank.isBlank, blank.draft.isEmpty, activeID != id {
+            close(blank)
+        }
+        rememberSession()
     }
 
     /// A link let go of over the tabs becomes a tab among them.
@@ -3929,15 +3996,18 @@ final class Browser: NSObject, ObservableObject {
         summoning = false
         // Never a name and password written into the address: they would be
         // on screen, and in whatever you copy from here.
-        typed = active?.address.map { url -> String in
-            guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false), parts.user != nil || parts.password != nil
-            else { return url.absoluteString }
-            parts.user = nil
-            parts.password = nil
-            return parts.string ?? ""
-        } ?? ""
+        typed = Browser.visibleAddress(active?.address)
         editing = true
         focusRequest += 1
+    }
+
+    static func visibleAddress(_ url: URL?) -> String {
+        guard let url else { return "" }
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.user != nil || parts.password != nil else { return url.absoluteString }
+        parts.user = nil
+        parts.password = nil
+        return parts.string ?? ""
     }
 
     func dismiss() {
@@ -4594,9 +4664,25 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         decisionHandler: @escaping (WKPermissionDecision) -> Void
     ) {
         let give: (WKPermissionDecision) -> Void = { decision in
-            guard Store.testing else { return decisionHandler(decision) }
-            Browser.locationAnswered = decision == .grant ? "granted" : "denied"
-            decisionHandler(.deny)
+            if Store.testing {
+                Browser.locationAnswered = decision == .grant ? "granted" : "denied"
+                return decisionHandler(.deny)
+            }
+            guard decision == .grant else { return decisionHandler(decision) }
+            guard PageLocations.provide(webView) else {
+                self.announce("Location is unavailable on this version of WebKit.")
+                return decisionHandler(.deny)
+            }
+            LocationAccess.shared.authorize { allowed in
+                guard let tab = self.tab(for: webView), tab.id == self.activeID,
+                      let page = webView.url, let scheme = page.scheme, let host = page.host(),
+                      Browser.origin(scheme, host, page.port ?? 0) == Browser.origin(origin.protocol, origin.host, origin.port)
+                else { return decisionHandler(.deny) }
+                if !allowed {
+                    self.announce("Location is unavailable. Check Search in System Settings › Privacy & Security › Location Services.")
+                }
+                decisionHandler(allowed ? .grant : .deny)
+            }
         }
         // WebKit names the page's origin for a frame it let in, whoever the
         // frame is: the frame's own is what counts.
@@ -4608,15 +4694,16 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
               Browser.origin(asker.protocol, asker.host, asker.port) == site
         else { return give(.deny) }
         let key = "\(site)|location"
-        if !tab.shy, let remembered = Store.settings.object(forKey: "capture." + key) as? Bool {
+        let shy = tab.shy || !webView.configuration.websiteDataStore.isPersistent
+        if !shy, let remembered = Store.settings.object(forKey: "capture." + key) as? Bool {
             return give(remembered ? .grant : .deny)
         }
         // One question at a time, as for the camera.
         guard decide == nil else { return give(.deny) }
         decide = give
-        askedAbout = tab.shy ? "" : key
+        askedAbout = shy ? "" : key
         let named = Browser.extensionScheme(origin.protocol) ? Browser.extensionName(origin.host) : origin.host
-        asking = CaptureAsk(host: named, wants: "location", once: true, keeps: !tab.shy)
+        asking = CaptureAsk(host: named, wants: "location", once: true, keeps: !shy)
     }
 
     /// A page asking to send notifications. Asked over its own page, as the

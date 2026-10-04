@@ -45,7 +45,6 @@ struct SplitTabItem: View {
                     half(right)
                 }
                 .frame(width: width, height: height)
-                .overlay(alignment: .trailing) { cross }
             }
         }
         .overlay {
@@ -76,26 +75,7 @@ struct SplitTabItem: View {
         .frame(maxWidth: .infinity, maxHeight: stacked ? height : .infinity)
     }
 
-    /// Across the top: one cross, at the end of the item, for whichever half
-    /// the pointer is over.
-    @ViewBuilder
-    private var cross: some View {
-        if interactive, let id = hovered, let tab = [left, right].first(where: { $0.id == id }),
-           browser.editingTab == nil {
-            Image(systemName: "xmark")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(Palette.muted)
-                .frame(width: 15, height: 15)
-                .background(Palette.ink.opacity(0.07), in: Circle())
-                .overlay {
-                    CloseClick(armed: true) { browser.close(tab) }
-                        .frame(width: 30, height: 28)
-                }
-                .padding(.trailing, 7)
-                .transition(.opacity)
-                .help(tab.id == left.id ? "Close the left page" : "Close the right page")
-        }
-    }
+
 }
 
 private struct SplitTabHalf: View {
@@ -152,7 +132,7 @@ private struct SplitTabHalf: View {
 
     var body: some View {
         handled
-            .accessibilityElement(children: editing ? .contain : .ignore)
+            .accessibilityElement(children: .contain)
             .accessibilityLabel(title)
             .accessibilityValue(focused ? "Focused page" : "")
             .accessibilityHint(interactive ? "Click to focus this page; right-click for tab actions" : "")
@@ -188,7 +168,7 @@ private struct SplitTabHalf: View {
                 status
                 // In the column each line has its own cross at its own end,
                 // one under the other; across the top the item has one.
-                if interactive && stacked { closeButton }
+                if interactive { closeButton }
             }
         }
     }
@@ -239,15 +219,16 @@ private struct SplitTabHalf: View {
     }
 
     private var closeButton: some View {
-        Image(systemName: "xmark")
-            .font(.system(size: 8, weight: .semibold))
-            .foregroundStyle(Palette.muted)
-            .frame(width: 15, height: 15)
-            .background(hovering ? Palette.ink.opacity(0.07) : .clear, in: Circle())
-            .opacity(hovering ? 1 : 0)
-            .overlay {
-                CloseClick(armed: hovering) { browser.close(tab) }
-                    .frame(width: 26, height: height)
-            }
+        Button { browser.close(tab) } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Palette.muted)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Close \(title)")
+        .help("Close \(title)")
+        .focusable()
     }
 }

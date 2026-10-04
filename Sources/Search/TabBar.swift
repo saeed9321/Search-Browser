@@ -21,14 +21,8 @@ struct TabBar: View {
     /// The plus only comes out when the pointer is in the row.
     @State private var nearby = false
     @State private var plussed = false
-    /// What stands before the tabs: reload, always, and back and forward
-    /// too when they are asked to the left.
-    private var leading: CGFloat {
-        let reload = 26 + Metrics.tabGap
-        return browser.prefs.navigationLeft ? 2 * 26 + 4 + Metrics.tabGap + reload : reload
-    }
-    /// How wide the doors at the far end are, extension buttons included.
-    @State private var doors: CGFloat = 0
+    /// The helm's width when it stands before the tabs rather than after them.
+    private var leading: CGFloat { 0 }
 
     var body: some View {
         // A GeometryReader is only here to measure the width. Its content is
@@ -43,23 +37,17 @@ struct TabBar: View {
                 // like the lights' corner, and a double-click there does what
                 // a title bar's does — zooms, by default — rather than open
                 // a tab: the plus and ⌘T are for that.
-                DragStrip(reserved: lights + dot + leading + (making ? min(540, room(in: geo.size.width)) : run(in: geo.size.width)) + Metrics.tabGap + Metrics.plusWidth, trailing: doors + 12)
+                DragStrip(reserved: lights + dot + leading + (making ? min(540, room(in: geo.size.width)) : run(in: geo.size.width)) + Metrics.tabGap + Metrics.plusWidth, trailing: 12)
                 // And the corner the lights sit in, which is title bar too —
                 // the one stretch left to take hold of when tabs fill the row.
                 DragStrip()
                     .frame(width: lights)
 
                 HStack(spacing: Metrics.tabGap) {
-                    // Back and forward by the lights, when asked.
-                    if browser.prefs.navigationLeft { Helm(browser: browser, reloads: false) }
                     // The space on screen, first, when there are spaces.
                     // Above the tabs, for the name it shows over them a moment
                     // after a switch.
                     if browser.prefs.usesSpaces { SpaceDot(browser: browser).zIndex(1) }
-                    // Reload, right before the pinned tabs, wherever back and
-                    // forward are.
-                    ReloadDoor(browser: browser)
-
                     // The tabs, in a run of their own. While they fit, it is
                     // exactly as wide as they are and nothing about the row
                     // changes. Past what the window holds at their narrowest
@@ -153,31 +141,12 @@ struct TabBar: View {
                     }
                     .buttonStyle(.plain)
                     .onHover { plussed = $0 }
-                    .opacity(nearby ? 1 : 0)
-                    .scaleEffect(nearby ? 1 : 0.7, anchor: .leading)
-                    .allowsHitTesting(nearby)
-                    .animation(Motion.settle, value: nearby)
+                    .accessibilityLabel("New tab")
+                    .help("New tab   ⌘T")
+                    .focusable()
 
                     Spacer(minLength: 0)
 
-                    // Back, forward and the bookmarks, at the far end of the
-                    // row. The dropdown hangs from the last one.
-                    HStack(spacing: Metrics.tabGap) {
-                        // Only while a download is running, and a moment after.
-                        FetchDoor(browser: browser, fetches: browser.fetches)
-                        ExtensionSlot()
-                        if !browser.prefs.navigationLeft {
-                            Helm(browser: browser, reloads: false).padding(.trailing, 8)
-                        }
-                        BookmarkDoor(browser: browser, arrowEdge: .bottom)
-                    }
-                    .background {
-                        GeometryReader { box in
-                            Color.clear
-                                .onAppear { doors = box.size.width }
-                                .onChange(of: box.size.width) { _, width in doors = width }
-                        }
-                    }
                 }
                 // The traffic lights are the system's. The row starts after
                 // them and stays there — nothing here moves to get out of
@@ -368,13 +337,9 @@ struct TabBar: View {
         return total
     }
 
-    /// The strip, less the lights, the helm when it leads, the plus, the
-    /// doors at the far end and the air around them. The doors are measured;
-    /// until they have been, the helm and the bookmarks stand in for them —
-    /// unless the helm leads, when nothing at the far end may be a real zero.
+    /// The strip, less the lights, the plus and the air around them.
     private func room(in strip: CGFloat) -> CGFloat {
-        let far = doors > 0 || browser.prefs.navigationLeft ? doors : Metrics.helm + 26
-        return max(0, strip - lights - dot - leading - 12 - Metrics.plusWidth - far - 3 * Metrics.tabGap)
+        return max(0, strip - lights - dot - leading - 12 - Metrics.plusWidth - 3 * Metrics.tabGap)
     }
 
     /// What the space's dot takes before the tabs, when there are spaces.
@@ -580,21 +545,9 @@ private struct TabPill: View {
         .background { ground }
         .modifier(Shake(travel: shake))
         .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        // Never both at once.
-        //
-        // A view carrying a single tap *and* a double tap has to wait out the
-        // system's double-click delay before it can conclude that a click was
-        // single — and that delay is a preference, adjustable up to a second.
-        // Which is exactly how long a tab took to come forward.
-        //
-        // So each tab carries one gesture. The pinned square you are already
-        // on has nothing to do on a single click, so it takes the double one
-        // and goes back to the page it was pinned at — or, there already,
-        // edits its letter; everything else answers the first click at
-        // once. Change Letter in the menu covers the rest.
-        .modifier(OneClick(double: live && pinned) {
-            if live && pinned {
-                browser.goHome(tab)
+        .modifier(OneClick(double: false) {
+            if pinned {
+                browser.select(tab)
             } else if live && !pinned {
                 browser.beginTabEdit(tab)
             } else {
@@ -605,6 +558,10 @@ private struct TabPill: View {
         .onHover { hovering = $0 }
         .contextMenu { TabMenu(browser: browser, tab: tab, close: close) }
         .help(pinned || compact ? tab.label : "")
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(tab.label)
+        .accessibilityAddTraits(live ? .isSelected : [])
+        .accessibilityAction(named: "Select tab") { browser.select(tab) }
         .animation(Motion.quick, value: hovering)
         .animation(Motion.glide, value: editing)
         .animation(Motion.glide, value: tab.pin)
@@ -682,38 +639,19 @@ private struct TabPill: View {
                         .transition(.opacity)
                 }
 
-                // Pinned to the right-hand end of the pill, not trailing the title.
-                // One slot doing two jobs: the cross when the pointer is here, the
-                // ring while the page is still coming, never both.
-                ZStack {
-                    if hovering {
+                if !editing {
+                    Button(action: close) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 8, weight: .semibold))
+                            .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(Palette.muted)
-                            .frame(width: 15, height: 15)
-                            .background(Palette.ink.opacity(0.07), in: Circle())
-                            .transition(.opacity)
-                    } else if tab.loading {
-                        Ring().transition(.opacity)
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Close \(tab.label)")
+                    .help("Close \(tab.label)")
+                    .focusable()
                 }
-                .frame(width: editing || (speaker && !hovering) ? 0 : 15, height: 15)
-                .opacity(editing ? 0 : 1)
-                // The cross is 15 points across because that is how big it should
-                // look. What you have to hit is the whole right-hand end of the
-                // tab: an overlay is not laid out, so it can reach past its own
-                // frame without moving anything that is.
-                //
-                // A view of AppKit's own takes the click there, while the
-                // cross shows (see CloseClick).
-                .overlay {
-                    if !editing {
-                        CloseClick(armed: hovering, act: close)
-                            .frame(width: 30, height: 28)
-                    }
-                }
-                .animation(Motion.quick, value: hovering)
-                .animation(Motion.quick, value: tab.loading)
             }
         }
         .padding(.leading, 11)
