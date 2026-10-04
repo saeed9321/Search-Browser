@@ -606,14 +606,17 @@ private struct PinSquare: View {
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: scale * 9 / 34, style: .continuous))
-        .modifier(OneClick(double: live) {
-            if live { browser.goHome(tab) } else { browser.select(tab) }
+        .modifier(OneClick(double: false) {
+            browser.select(tab)
         })
         // Put down, like ⌘W: close() is what knows a pin isn't removed.
         .overlay { MiddleClick { browser.close(tab) } }
         .onHover { hovering = $0 }
         .contextMenu { TabMenu(browser: browser, tab: tab, close: { browser.close(tab) }) }
         .help(tab.label)
+        .accessibilityLabel(tab.label)
+        .accessibilityAddTraits(live ? .isSelected : [])
+        .accessibilityAction(named: "Select pinned tab") { browser.select(tab) }
         .animation(Motion.quick, value: hovering)
         .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
@@ -697,42 +700,19 @@ private struct SideRow: View {
         .padding(.trailing, status ? 7 : 10)
         .frame(height: 28)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // The title keeps its length under the pointer and fades out
-        // beneath the cross, rather than being cut shorter, so its end
-        // doesn't jump on each row the pointer passes.
-        .mask {
-            ZStack {
-                Rectangle().opacity(hovering && !editing && !status ? 0 : 1)
-                HStack(spacing: 0) {
-                    Rectangle()
-                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: 16)
-                    Color.clear.frame(width: 26)
-                }
-            }
-        }
+        .padding(.trailing, editing ? 0 : 28)
         .overlay(alignment: .trailing) {
-            if !editing {
-                ZStack {
-                    if hovering {
-                        // A pinned row is put down, not closed (see
-                        // Browser.close), and says so, as Arc's does.
-                        Image(systemName: tab.pin != nil ? "minus" : "xmark")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(Palette.muted)
-                            .frame(width: 15, height: 15)
-                            .background(Palette.ink.opacity(0.07), in: Circle())
-                            .transition(.opacity)
-                    }
-                }
-                .frame(width: 15, height: 15)
-                .overlay {
-                    Color.clear
-                        .frame(width: 30, height: 28)
+            if !editing, interactive {
+                Button(action: close) {
+                    Image(systemName: tab.pin != nil ? "minus" : "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Palette.muted)
+                        .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
-                        .onTapGesture { if hovering { close() } }
                 }
-                .padding(.trailing, 7)
+                .buttonStyle(.borderless)
+                .accessibilityLabel(tab.pin != nil ? "Put down \(tab.label)" : "Close \(tab.label)")
+                .focusable()
             }
         }
         .animation(Motion.quick, value: tab.loading)
@@ -911,6 +891,9 @@ struct Door: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(help)
+        .accessibilityLabel(help.isEmpty ? icon : help)
+        .accessibilityAddTraits(on ? .isSelected : [])
+        .focusable()
         .animation(Motion.quick, value: hovering)
         .animation(Motion.quick, value: on)
     }

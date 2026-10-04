@@ -344,10 +344,11 @@ struct WelcomePanel: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.system(size: 13.5)).foregroundStyle(Palette.ink)
-                    Text(detail).font(.system(size: 11.5)).foregroundStyle(Palette.faint)
+                    Text(detail).font(.system(size: 11.5)).foregroundStyle(Palette.muted)
                 }
                 Spacer()
                 Switch(on: $on)
+                    .environment(\.settingsControlTitle, title)
             }
         }
     }

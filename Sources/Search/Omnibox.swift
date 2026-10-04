@@ -378,7 +378,7 @@ struct AddressField: NSViewRepresentable {
         field.delegate = context.coordinator
         field.isBordered = false
         field.drawsBackground = false
-        field.focusRingType = .none
+        field.focusRingType = .default
         field.font = .systemFont(ofSize: 15.5)
         field.textColor = Palette.NS.ink
         field.lineBreakMode = .byTruncatingTail
@@ -387,12 +387,13 @@ struct AddressField: NSViewRepresentable {
         // SwiftUI picks its own colour for a placeholder, and on a pale ground
         // that colour was near-white.
         field.placeholderAttributedString = NSAttributedString(
-            string: "Enter a web address",
+            string: "Search or enter an address",
             attributes: [
                 .font: NSFont.systemFont(ofSize: 15.5),
-                .foregroundColor: NSColor(Palette.ink.opacity(0.3)),
+                .foregroundColor: Palette.NS.muted,
             ]
         )
+        field.setAccessibilityLabel("Search or enter an address")
         return field
     }
 

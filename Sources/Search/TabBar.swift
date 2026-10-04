@@ -22,7 +22,7 @@ struct TabBar: View {
     @State private var nearby = false
     @State private var plussed = false
     /// The helm's width when it stands before the tabs rather than after them.
-    private var leading: CGFloat { browser.prefs.navigationLeft ? Metrics.helm - 8 + Metrics.tabGap : 0 }
+    private var leading: CGFloat { 0 }
     /// How wide the doors at the far end are, extension buttons included.
     @State private var doors: CGFloat = 0
 
@@ -44,7 +44,7 @@ struct TabBar: View {
 
                 HStack(spacing: Metrics.tabGap) {
                     // Back, forward and reload by the lights, when asked.
-                    if browser.prefs.navigationLeft { Helm(browser: browser) }
+
                     // The space on screen, first, when there are spaces.
                     // Above the tabs, for the name it shows over them a moment
                     // after a switch.
@@ -143,31 +143,13 @@ struct TabBar: View {
                     }
                     .buttonStyle(.plain)
                     .onHover { plussed = $0 }
-                    .opacity(nearby ? 1 : 0)
-                    .scaleEffect(nearby ? 1 : 0.7, anchor: .leading)
-                    .allowsHitTesting(nearby)
-                    .animation(Motion.settle, value: nearby)
+                    .accessibilityLabel("New tab")
+                    .help("New tab   ⌘T")
+                    .focusable()
 
                     Spacer(minLength: 0)
 
-                    // Back, forward, reload, and the bookmarks, at the far end
-                    // of the row. The dropdown hangs from the last one.
-                    HStack(spacing: Metrics.tabGap) {
-                        // Only while a download is running, and a moment after.
-                        FetchDoor(browser: browser, fetches: browser.fetches)
-                        ExtensionSlot()
-                        if !browser.prefs.navigationLeft {
-                            Helm(browser: browser).padding(.trailing, 8)
-                        }
-                        BookmarkDoor(browser: browser, arrowEdge: .bottom)
-                    }
-                    .background {
-                        GeometryReader { box in
-                            Color.clear
-                                .onAppear { doors = box.size.width }
-                                .onChange(of: box.size.width) { _, width in doors = width }
-                        }
-                    }
+
                 }
                 // The traffic lights are the system's. The row starts after
                 // them and stays there — nothing here moves to get out of
@@ -540,21 +522,9 @@ private struct TabPill: View {
         .background { ground }
         .modifier(Shake(travel: shake))
         .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        // Never both at once.
-        //
-        // A view carrying a single tap *and* a double tap has to wait out the
-        // system's double-click delay before it can conclude that a click was
-        // single — and that delay is a preference, adjustable up to a second.
-        // Which is exactly how long a tab took to come forward.
-        //
-        // So each tab carries one gesture. The pinned square you are already
-        // on has nothing to do on a single click, so it takes the double one
-        // and goes back to the page it was pinned at — or, there already,
-        // edits its letter; everything else answers the first click at
-        // once. Change Letter in the menu covers the rest.
-        .modifier(OneClick(double: live && pinned) {
-            if live && pinned {
-                browser.goHome(tab)
+        .modifier(OneClick(double: false) {
+            if pinned {
+                browser.select(tab)
             } else if live && !pinned {
                 browser.beginTabEdit(tab)
             } else {
@@ -565,6 +535,10 @@ private struct TabPill: View {
         .onHover { hovering = $0 }
         .contextMenu { TabMenu(browser: browser, tab: tab, close: close) }
         .help(pinned || compact ? tab.label : "")
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(tab.label)
+        .accessibilityAddTraits(live ? .isSelected : [])
+        .accessibilityAction(named: "Select tab") { browser.select(tab) }
         .animation(Motion.quick, value: hovering)
         .animation(Motion.glide, value: editing)
         .animation(Motion.glide, value: tab.pin)
@@ -642,38 +616,19 @@ private struct TabPill: View {
                         .transition(.opacity)
                 }
 
-                // Pinned to the right-hand end of the pill, not trailing the title.
-                // One slot doing two jobs: the cross when the pointer is here, the
-                // ring while the page is still coming, never both.
-                ZStack {
-                    if hovering {
+                if !editing {
+                    Button(action: close) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 8, weight: .semibold))
+                            .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(Palette.muted)
-                            .frame(width: 15, height: 15)
-                            .background(Palette.ink.opacity(0.07), in: Circle())
-                            .transition(.opacity)
-                    } else if tab.loading {
-                        Ring().transition(.opacity)
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Close \(tab.label)")
+                    .help("Close \(tab.label)")
+                    .focusable()
                 }
-                .frame(width: editing || (speaker && !hovering) ? 0 : 15, height: 15)
-                .opacity(editing ? 0 : 1)
-                // The cross is 15 points across because that is how big it should
-                // look. What you have to hit is the whole right-hand end of the
-                // tab: an overlay is not laid out, so it can reach past its own
-                // frame without moving anything that is.
-                //
-                // A view of AppKit's own takes the click there, while the
-                // cross shows (see CloseClick).
-                .overlay {
-                    if !editing {
-                        CloseClick(armed: hovering, act: close)
-                            .frame(width: 30, height: 28)
-                    }
-                }
-                .animation(Motion.quick, value: hovering)
-                .animation(Motion.quick, value: tab.loading)
             }
         }
         .padding(.leading, 11)

@@ -128,6 +128,8 @@ struct Line<Control: View>: View {
             }
             Spacer(minLength: 8)
             control()
+                .environment(\.settingsControlTitle, title)
+                .accessibilityLabel(title)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)

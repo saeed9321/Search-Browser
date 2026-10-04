@@ -110,7 +110,7 @@ struct Fold: View {
                 // as the column does, or the page showed through between the
                 // tabs, and the shadow fell from every title and icon rather
                 // than from the row's edge.
-                TabBar(browser: browser)
+                BrowserChrome(browser: browser)
                     .transition(.move(edge: .top)
                         .combined(with: .casting(FoldShadow(y: 4, behind: true))))
             }

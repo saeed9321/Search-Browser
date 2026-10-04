@@ -116,6 +116,9 @@ struct SettingsPanel: View {
                 .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(page.title)
+            .accessibilityAddTraits(on ? .isSelected : [])
+            .focusable()
             .onHover { hovering = $0 }
             .animation(Motion.quick, value: hovering)
         }
@@ -140,7 +143,6 @@ struct SettingsPanel: View {
                     case .general: general
                     case .tabs:
                         tabs
-                        if !prefs.sidebar { toolbar }
                     case .shortcuts: ShortcutsPage(browser: browser, store: .shared)
                     case .extensions: ExtensionsPage(browser: browser)
                     case .passwords: passwords
@@ -379,17 +381,6 @@ struct SettingsPanel: View {
     }
 
     // MARK: - tabs
-
-    /// Where back, forward and reload sit with the tabs across the top. With
-    /// the sidebar they are already beside the window's buttons: nothing to
-    /// move, and the line isn't shown.
-    private var toolbar: some View {
-        Card {
-            Line("Back, forward and reload on the left", "Beside the window's buttons, before the tabs") {
-                Switch(on: $prefs.navigationLeft)
-            }
-        }
-    }
 
     private var tabs: some View {
         Card {
@@ -749,57 +740,50 @@ struct Segmented<Option: Hashable>: View {
     /// True when the control has the whole width to itself, so the choices
     /// share it evenly instead of each taking only what its word needs.
     var wide = false
-
-    @Namespace private var slide
+    @Environment(\.settingsControlTitle) private var title
 
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(options, id: \.0) { option, title in
-                Text(title)
-                    .font(.system(size: 11.5, weight: option == selection ? .medium : .regular))
-                    .foregroundStyle(option == selection ? Palette.ink : Palette.muted)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: !wide, vertical: false)
-                    .frame(maxWidth: wide ? .infinity : nil)
-                    .padding(.horizontal, wide ? 4 : 10)
-                    .padding(.vertical, 5)
-                    .background {
-                        if option == selection {
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(Palette.ground)
-                                .shadow(color: .black.opacity(0.08), radius: 3, y: 1)
-                                .matchedGeometryEffect(id: "chosen", in: slide)
-                        }
-                    }
-                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .onTapGesture {
-                        withAnimation(Motion.settle) { selection = option }
-                    }
+        Picker(title, selection: $selection) {
+            ForEach(options, id: \.0) { option, label in
+                Text(label).tag(option)
             }
         }
-        .padding(2)
-        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .animation(Motion.settle, value: selection)
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .accessibilityLabel(title)
+        .accessibilityValue(options.first { $0.0 == selection }?.1 ?? "")
+        .fixedSize(horizontal: !wide, vertical: false)
+    }
+}
+
+private struct SettingsControlTitle: EnvironmentKey {
+    static let defaultValue = "Setting"
+}
+
+extension EnvironmentValues {
+    var settingsControlTitle: String {
+        get { self[SettingsControlTitle.self] }
+        set { self[SettingsControlTitle.self] = newValue }
     }
 }
 
 /// On or off, in ink rather than in blue.
 struct Switch: View {
     @Binding var on: Bool
+    @Environment(\.settingsControlTitle) private var title
 
     var body: some View {
-        Capsule()
-            .fill(on ? Palette.ink : Palette.faint)
-            .frame(width: 30, height: 18)
-            .overlay(alignment: on ? .trailing : .leading) {
-                Circle()
-                    .fill(Palette.ground)
-                    .shadow(color: .black.opacity(0.18), radius: 1.5, y: 1)
-                    .padding(2)
-            }
-            .contentShape(Capsule())
-            .onTapGesture { withAnimation(Motion.settle) { on.toggle() } }
-            .animation(Motion.settle, value: on)
+        HStack(spacing: 8) {
+            Toggle(title, isOn: $on)
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .accessibilityLabel(title)
+            Text(on ? "On" : "Off")
+                .font(.system(size: 11.5))
+                .foregroundStyle(Palette.muted)
+                .frame(width: 22, alignment: .leading)
+                .accessibilityHidden(true)
+        }
     }
 }
 

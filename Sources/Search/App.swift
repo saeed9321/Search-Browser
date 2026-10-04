@@ -393,8 +393,13 @@ struct ContentView: View {
             }
 
             if !browser.prefs.sidebar, !browser.folded, fullscreenTab == nil {
-                TabBar(browser: browser)
+                BrowserChrome(browser: browser)
                     .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            if sidebar {
+                NavigationRow(browser: browser)
+                    .padding(.leading, sideOnRight ? 0 : chrome.width)
+                    .padding(.trailing, sideOnRight ? chrome.width : 0)
             }
 
             // The bookmarks bar, under the strip or beside the column's top.
@@ -864,7 +869,8 @@ struct ContentView: View {
     private var band: CGFloat {
         guard fullscreenTab == nil else { return 0 }
         // Folded, the strip is out of the window and the page has its height.
-        return browser.prefs.sidebar || browser.folded ? 0 : Metrics.strip
+        if browser.folded { return 0 }
+        return browser.prefs.sidebar ? Metrics.navigation : Metrics.chrome
     }
 
     /// Either visible pane may give its page to WebKit's fullscreen window.
